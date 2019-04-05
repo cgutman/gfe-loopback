@@ -21,14 +21,14 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 #define TCP_PORT_COUNT 3
-short TCP_PORTS[TCP_PORT_COUNT] = {
+unsigned short TCP_PORTS[TCP_PORT_COUNT] = {
     47989,
     47984,
     48010
 };
 
 #define UDP_PORT_COUNT 5
-short UDP_PORTS[UDP_PORT_COUNT] = {
+unsigned short UDP_PORTS[UDP_PORT_COUNT] = {
     47998,
     47999,
     48000,
@@ -228,7 +228,7 @@ void* socket_thread(void* context) {
     return NULL;
 }
 
-int create_socket(short port, int proto) {
+int create_socket(unsigned short port, int proto) {
     int sock;
     struct sockaddr_in addr;
     int err;
