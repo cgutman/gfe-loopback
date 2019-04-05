@@ -268,7 +268,7 @@ int main(int argc, char* argv[]) {
         int nfds = 0;
         for (i = 0; i < TCP_PORT_COUNT; i++) {
             FD_SET(listeners[i], &fds);
-            nfds = MAX(nfds, listeners[i]);
+            nfds = MAX(nfds, listeners[i] + 1);
         }
 
         err = select(nfds, &fds, NULL, NULL, NULL);
