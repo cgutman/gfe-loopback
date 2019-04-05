@@ -178,7 +178,6 @@ void* socket_thread(void* context) {
 
         if (s1_read_shutdown && s2_read_shutdown) {
             // If both sides closed, tear it down
-            printf("Graceful disconnect\n");
             break;
         }
 
@@ -221,6 +220,8 @@ void* socket_thread(void* context) {
             }
         }
     }
+
+    printf("Disconnecting after %d bytes transferred\n", (MAX_BYTES_XFER - bytes_left));
 
     close(s1);
     close(s2);
@@ -340,6 +341,8 @@ int main(int argc, char* argv[]) {
                     perror("recvfrom");
                     break;
                 }
+
+                printf("Sending %d bytes to %s:%d\n", err, inet_ntoa(remote_addr.sin_addr), UDP_PORTS[i]);
 
                 remote_addr.sin_port = htons(UDP_PORTS[i]);
                 err = sendto(udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
