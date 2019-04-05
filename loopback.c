@@ -154,6 +154,11 @@ void* socket_thread(void* context) {
         fd_set fds;
         struct timeval tv;
 
+        if (bytes_left <= 0) {
+            fprintf(stderr, "Connection data limit exceeded\n");
+            break;
+        }
+
         FD_ZERO(&fds);
 
         if (!s1_read_shutdown)
@@ -163,6 +168,7 @@ void* socket_thread(void* context) {
 
         if (s1_read_shutdown && s2_read_shutdown) {
             // If both sides closed, tear it down
+            printf("Graceful disconnect\n");
             break;
         }
 
