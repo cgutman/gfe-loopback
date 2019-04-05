@@ -119,7 +119,7 @@ int connect_back(int sock) {
     }
     else {
         int optval;
-        int optlen;
+        unsigned int optlen;
 
         // Check the connection result
         optlen = sizeof(optval);
@@ -153,7 +153,7 @@ void* socket_thread(void* context) {
     int err;
     int bytes_left = MAX_BYTES_XFER;
 
-    s1 = (int)context;
+    s1 = (intptr_t)context;
     s2 = connect_back(s1);
     if (s2 < 0) {
         close(s1);
@@ -321,7 +321,7 @@ int main(int argc, char* argv[]) {
                     break;
                 }
 
-                if (pthread_create(&thread, &attr, socket_thread, (void*)sock)) {
+                if (pthread_create(&thread, &attr, socket_thread, (void*)(intptr_t)sock)) {
                     close(sock);
                 }
             }
@@ -329,8 +329,6 @@ int main(int argc, char* argv[]) {
 
         for (i = 0; i < UDP_PORT_COUNT; i++) {
             if (FD_ISSET(udp_socks[i], &fds)) {
-                int sock;
-                pthread_t thread;
                 char buf[32];
                 struct sockaddr_in remote_addr;
                 socklen_t remote_addr_len;
