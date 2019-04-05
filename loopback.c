@@ -20,10 +20,20 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-#define TCP_PORT_COUNT 2
+#define TCP_PORT_COUNT 3
 short TCP_PORTS[TCP_PORT_COUNT] = {
     47989,
-    47984
+    47984,
+    48010
+};
+
+#define UDP_PORT_COUNT 5
+short UDP_PORTS[UDP_PORT_COUNT] = {
+    47998,
+    47999,
+    48000,
+    48002,
+    48010
 };
 
 int splice_data(int from, int to, int len) {
@@ -217,12 +227,14 @@ void* socket_thread(void* context) {
     return NULL;
 }
 
-int create_listener(short port) {
+int create_socket(short port, int proto) {
     int sock;
     struct sockaddr_in addr;
     int err;
 
-    sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    sock = socket(AF_INET,
+                  proto == IPPROTO_TCP ? SOCK_STREAM : SOCK_DGRAM,
+                  proto);
     if (sock < 0) {
         perror("sock");
         return -1;
@@ -238,11 +250,13 @@ int create_listener(short port) {
         return -1;
     }
 
-    err = listen(sock, 1);
-    if (err < 0) {
-        perror("listen");
-        close(sock);
-        return -1;
+    if (proto == IPPROTO_TCP) {
+        err = listen(sock, 1);
+        if (err < 0) {
+            perror("listen");
+            close(sock);
+            return -1;
+        }
     }
 
     return sock;
@@ -251,6 +265,7 @@ int create_listener(short port) {
 int main(int argc, char* argv[]) {
     fd_set fds;
     int listeners[TCP_PORT_COUNT];
+    int udp_socks[UDP_PORT_COUNT];
     int i;
     int err;
     pthread_attr_t attr;
@@ -262,8 +277,15 @@ int main(int argc, char* argv[]) {
     signal(SIGPIPE, SIG_IGN);
 
     for (i = 0; i < TCP_PORT_COUNT; i++) {
-        listeners[i] = create_listener(TCP_PORTS[i]);
+        listeners[i] = create_socket(TCP_PORTS[i], IPPROTO_TCP);
         if (listeners[i] < 0) {
+            return -1;
+        }
+    }
+
+    for (i = 0; i < UDP_PORT_COUNT; i++) {
+        udp_socks[i] = create_socket(UDP_PORTS[i], IPPROTO_UDP);
+        if (udp_socks[i] < 0) {
             return -1;
         }
     }
@@ -275,6 +297,10 @@ int main(int argc, char* argv[]) {
         for (i = 0; i < TCP_PORT_COUNT; i++) {
             FD_SET(listeners[i], &fds);
             nfds = MAX(nfds, listeners[i] + 1);
+        }
+        for (i = 0; i < UDP_PORT_COUNT; i++) {
+            FD_SET(udp_socks[i], &fds);
+            nfds = MAX(nfds, udp_socks[i] + 1);
         }
 
         err = select(nfds, &fds, NULL, NULL, NULL);
@@ -297,6 +323,33 @@ int main(int argc, char* argv[]) {
                 if (pthread_create(&thread, &attr, socket_thread, (void*)sock)) {
                     close(sock);
                 }
+            }
+        }
+
+        for (i = 0; i < UDP_PORT_COUNT; i++) {
+            if (FD_ISSET(udp_socks[i], &fds)) {
+                int sock;
+                pthread_t thread;
+                char buf[32];
+                struct sockaddr_in remote_addr;
+                socklen_t remote_addr_len;
+
+                remote_addr_len = sizeof(remote_addr);
+                err = recvfrom(udp_socks[i], buf, sizeof(buf), 0, (struct sockaddr*)&remote_addr, &remote_addr_len);
+                if (err < 0) {
+                    perror("recvfrom");
+                    break;
+                }
+
+                remote_addr.sin_port = htons(UDP_PORTS[i]);
+                err = sendto(udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
+                if (err < 0) {
+                    perror("sendto");
+                    break;
+                }
+
+                // Throttle send rate by sleeping 10 ms between packets
+                usleep(1000 * 10);
             }
         }
     }
