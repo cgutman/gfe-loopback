@@ -1,5 +1,3 @@
-#define _GNU_SOURCE
-
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
@@ -61,10 +59,11 @@ int splice_data(int from, int to, int len) {
 
 int connect_back(int sock) {
     int new_sock;
-    struct sockaddr_in remote_addr;
+    struct sockaddr_in6 remote_addr;
     socklen_t remote_addr_len;
-    struct sockaddr_in local_addr;
+    struct sockaddr_in6 local_addr;
     socklen_t local_addr_len;
+    char remote_addr_str[INET6_ADDRSTRLEN];
     int err;
     int opt;
     fd_set fds;
@@ -77,6 +76,10 @@ int connect_back(int sock) {
         return -1;
     }
 
+    // Convert to text form for printfs
+    inet_ntop(remote_addr.sin6_family, &remote_addr.sin6_addr,
+              remote_addr_str, sizeof(remote_addr_str));
+
     local_addr_len = sizeof(local_addr);
     err = getsockname(sock, (struct sockaddr*)&local_addr, &local_addr_len);
     if (err < 0) {
@@ -84,10 +87,16 @@ int connect_back(int sock) {
         return -1;
     }
 
-    new_sock = socket(local_addr.sin_family, SOCK_STREAM, IPPROTO_TCP);
+    new_sock = socket(local_addr.sin6_family, SOCK_STREAM, IPPROTO_TCP);
     if (new_sock < 0) {
         perror("socket");
         return -1;
+    }
+
+    if (local_addr.sin6_family == AF_INET6) {
+        // Also allow v4 traffic on this socket
+        int val = 0;
+        setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof(val));
     }
 
     // Switch the new socket to non-blocking mode to allow connect() to timeout
@@ -95,7 +104,7 @@ int connect_back(int sock) {
     ioctl(new_sock, FIONBIO, &opt);
 
     // Connect to the peer using the same port it contacted us on
-    remote_addr.sin_port = local_addr.sin_port;
+    remote_addr.sin6_port = local_addr.sin6_port;
     connect(new_sock, (struct sockaddr*)&remote_addr, remote_addr_len);
 
     // Wait 10 seconds for a successful connection or timeout
@@ -112,9 +121,9 @@ int connect_back(int sock) {
     else if (err == 0) {
         // Timeout
         close(new_sock);
-        fprintf(stderr, "Timeout connecting to %s:%d\n",
-               inet_ntoa(remote_addr.sin_addr),
-               ntohs(remote_addr.sin_port));
+        fprintf(stderr, "Timeout connecting to [%s]:%d\n",
+                remote_addr_str,
+                ntohs(remote_addr.sin6_port));
         return -1;
     }
     else {
@@ -125,9 +134,9 @@ int connect_back(int sock) {
         optlen = sizeof(optval);
         getsockopt(new_sock, SOL_SOCKET, SO_ERROR, &optval, &optlen);
         if (optval) {
-            fprintf(stderr, "Error connecting to %s:%d - %s (%d)\n",
-                    inet_ntoa(remote_addr.sin_addr),
-                    ntohs(remote_addr.sin_port),
+            fprintf(stderr, "Error connecting to [%s]:%d - %s (%d)\n",
+                    remote_addr_str,
+                    ntohs(remote_addr.sin6_port),
                     strerror(optval),
                     optval);
             close(new_sock);
@@ -138,9 +147,9 @@ int connect_back(int sock) {
         opt = 0;
         ioctl(new_sock, FIONBIO, &opt);
 
-        printf("Connected to %s:%d\n",
-               inet_ntoa(remote_addr.sin_addr),
-               ntohs(remote_addr.sin_port));
+        printf("Connected to [%s]:%d\n",
+               remote_addr_str,
+               ntohs(remote_addr.sin6_port));
         
         return new_sock;
     }
@@ -230,10 +239,11 @@ void* socket_thread(void* context) {
 
 int create_socket(unsigned short port, int proto) {
     int sock;
-    struct sockaddr_in addr;
+    struct sockaddr_in6 addr;
     int err;
+    int val;
 
-    sock = socket(AF_INET,
+    sock = socket(AF_INET6,
                   proto == IPPROTO_TCP ? SOCK_STREAM : SOCK_DGRAM,
                   proto);
     if (sock < 0) {
@@ -241,9 +251,13 @@ int create_socket(unsigned short port, int proto) {
         return -1;
     }
 
+    // Use this socket for both v6 and v4 traffic
+    val = 0;
+    setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof(val));
+
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port = htons(port);
     err = bind(sock, (struct sockaddr*)&addr, sizeof(addr));
     if (err < 0) {
         perror("bind");
@@ -330,8 +344,9 @@ int main(int argc, char* argv[]) {
         for (i = 0; i < UDP_PORT_COUNT; i++) {
             if (FD_ISSET(udp_socks[i], &fds)) {
                 char buf[32];
-                struct sockaddr_in remote_addr;
+                struct sockaddr_in6 remote_addr;
                 socklen_t remote_addr_len;
+                char remote_addr_str[INET6_ADDRSTRLEN];
 
                 remote_addr_len = sizeof(remote_addr);
                 err = recvfrom(udp_socks[i], buf, sizeof(buf), 0, (struct sockaddr*)&remote_addr, &remote_addr_len);
@@ -340,9 +355,12 @@ int main(int argc, char* argv[]) {
                     break;
                 }
 
-                printf("Sending %d bytes to %s:%d\n", err, inet_ntoa(remote_addr.sin_addr), UDP_PORTS[i]);
+                inet_ntop(remote_addr.sin6_family, &remote_addr.sin6_addr,
+                          remote_addr_str, sizeof(remote_addr_str));
 
-                remote_addr.sin_port = htons(UDP_PORTS[i]);
+                printf("Sending %d bytes to [%s]:%d\n", err, remote_addr_str, UDP_PORTS[i]);
+
+                remote_addr.sin6_port = htons(UDP_PORTS[i]);
                 err = sendto(udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
                 if (err < 0) {
                     perror("sendto");
