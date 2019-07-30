@@ -1,0 +1,14 @@
+Description=Loopback relay for testing GameStream ports
+
+Wants=network.target
+After=syslog.target network-online.target
+
+[Service]
+Type=simple
+ExecStart=gfe-loopback
+Restart=on-failure
+RestartSec=10
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
