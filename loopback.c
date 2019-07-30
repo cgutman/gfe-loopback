@@ -147,9 +147,9 @@ int connect_back(int sock) {
         opt = 0;
         ioctl(new_sock, FIONBIO, &opt);
 
-        printf("Connected to [%s]:%d\n",
-               remote_addr_str,
-               ntohs(remote_addr.sin6_port));
+        fprintf(stderr, "Connected to [%s]:%d\n",
+                remote_addr_str,
+                ntohs(remote_addr.sin6_port));
         
         return new_sock;
     }
@@ -199,7 +199,7 @@ void* socket_thread(void* context) {
             break;
         }
         else if (err == 0) {
-            printf("Connection idle timeout expired\n");
+            fprintf(stderr, "Connection idle timeout expired\n");
             break;
         }
         else if (FD_ISSET(s1, &fds)) {
@@ -230,7 +230,7 @@ void* socket_thread(void* context) {
         }
     }
 
-    printf("Disconnecting after %d bytes transferred\n", (MAX_BYTES_XFER - bytes_left));
+    fprintf(stderr, "Disconnecting after %d bytes transferred\n", (MAX_BYTES_XFER - bytes_left));
 
     close(s1);
     close(s2);
@@ -358,7 +358,7 @@ int main(int argc, char* argv[]) {
                 inet_ntop(remote_addr.sin6_family, &remote_addr.sin6_addr,
                           remote_addr_str, sizeof(remote_addr_str));
 
-                printf("Sending %d bytes to [%s]:%d\n", err, remote_addr_str, UDP_PORTS[i]);
+                fprintf(stderr, "Sending %d bytes to [%s]:%d\n", err, remote_addr_str, UDP_PORTS[i]);
 
                 remote_addr.sin6_port = htons(UDP_PORTS[i]);
                 err = sendto(udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
