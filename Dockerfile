@@ -13,7 +13,7 @@ USER root
 
 RUN set -ex && \
     apt-get update && \
-    apt-get install -y build-essential && \
+    apt-get install -y gcc && \
     apt-get install -y git && \
     apt-get clean -y && \
     rm -rf /var/lib/apt/lists/*
