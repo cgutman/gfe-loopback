@@ -9,17 +9,18 @@ EXPOSE 47984/tcp \
        48002/udp \
        48010/udp
 
-USER root
-
 RUN set -ex && \
     apt-get update && \
     apt-get install -y gcc && \
-    apt-get install -y git && \
     apt-get clean -y && \
     rm -rf /var/lib/apt/lists/*
 
-RUN cd /opt && git clone https://github.com/cgutman/gfe-loopback.git && cd gfe-loopback && gcc -o gfe-loopback loopback.c -pthread
+COPY loopback.c /opt
 
-WORKDIR /opt/gfe-loopback
+WORKDIR /opt
 
-ENTRYPOINT ["/opt/gfe-loopback/gfe-loopback"]
+RUN gcc -o gfe-loopback loopback.c -pthread
+
+USER nobody
+
+ENTRYPOINT ["/opt/gfe-loopback"]
