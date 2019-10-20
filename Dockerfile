@@ -1,4 +1,12 @@
-FROM ubuntu:latest
+FROM alpine:latest AS build-env
+RUN apk add --no-cache gcc musl-dev
+COPY loopback.c /opt
+WORKDIR /opt
+RUN gcc -o gfe-loopback loopback.c -pthread
+
+FROM alpine:latest
+COPY --from=build-env /opt/gfe-loopback /opt
+USER nobody
 
 EXPOSE 47984/tcp \
        47989/tcp \
@@ -8,19 +16,5 @@ EXPOSE 47984/tcp \
        48000/udp \
        48002/udp \
        48010/udp
-
-RUN set -ex && \
-    apt-get update && \
-    apt-get install -y gcc && \
-    apt-get clean -y && \
-    rm -rf /var/lib/apt/lists/*
-
-COPY loopback.c /opt
-
-WORKDIR /opt
-
-RUN gcc -o gfe-loopback loopback.c -pthread
-
-USER nobody
 
 ENTRYPOINT ["/opt/gfe-loopback"]
