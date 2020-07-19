@@ -15,6 +15,14 @@ EXPOSE 47984/tcp \
        47999/udp \
        48000/udp \
        48002/udp \
-       48010/udp
+       48010/udp \
+       37984/tcp \
+       37989/tcp \
+       38010/tcp \
+       37998/udp \
+       37999/udp \
+       38000/udp \
+       38002/udp \
+       38010/udp
 
 ENTRYPOINT ["/opt/gfe-loopback"]
