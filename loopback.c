@@ -19,6 +19,9 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
+// Server test ports will be offset by this amount from the client equivalent
+#define SERVER_TEST_PORT_OFFSET -10000
+
 #define TCP_PORT_COUNT 3
 unsigned short TCP_PORTS[TCP_PORT_COUNT] = {
     47989,
@@ -104,8 +107,8 @@ int connect_back(int sock) {
     opt = 1;
     ioctl(new_sock, FIONBIO, &opt);
 
-    // Connect to the peer using the same port it contacted us on
-    remote_addr.sin6_port = local_addr.sin6_port;
+    // Connect to the peer on the incoming port with the server test port offset negated
+    remote_addr.sin6_port = htons(ntohs(local_addr.sin6_port) - SERVER_TEST_PORT_OFFSET);
     connect(new_sock, (struct sockaddr*)&remote_addr, remote_addr_len);
 
     // Wait 10 seconds for a successful connection or timeout
@@ -280,8 +283,10 @@ int create_socket(unsigned short port, int proto) {
 
 int main(int argc, char* argv[]) {
     fd_set fds;
-    int listeners[TCP_PORT_COUNT];
-    int udp_socks[UDP_PORT_COUNT];
+    int server_test_listeners[TCP_PORT_COUNT];
+    int server_test_udp_socks[UDP_PORT_COUNT];
+    int client_test_listeners[TCP_PORT_COUNT];
+    int client_test_udp_socks[UDP_PORT_COUNT];
     int i;
     int err;
     pthread_attr_t attr;
@@ -293,15 +298,25 @@ int main(int argc, char* argv[]) {
     signal(SIGPIPE, SIG_IGN);
 
     for (i = 0; i < TCP_PORT_COUNT; i++) {
-        listeners[i] = create_socket(TCP_PORTS[i], IPPROTO_TCP);
-        if (listeners[i] < 0) {
+        server_test_listeners[i] = create_socket(TCP_PORTS[i] + SERVER_TEST_PORT_OFFSET, IPPROTO_TCP);
+        if (server_test_listeners[i] < 0) {
+            return -1;
+        }
+
+        client_test_listeners[i] = create_socket(TCP_PORTS[i], IPPROTO_TCP);
+        if (client_test_listeners[i] < 0) {
             return -1;
         }
     }
 
     for (i = 0; i < UDP_PORT_COUNT; i++) {
-        udp_socks[i] = create_socket(UDP_PORTS[i], IPPROTO_UDP);
-        if (udp_socks[i] < 0) {
+        server_test_udp_socks[i] = create_socket(UDP_PORTS[i] + SERVER_TEST_PORT_OFFSET, IPPROTO_UDP);
+        if (server_test_udp_socks[i] < 0) {
+            return -1;
+        }
+
+        client_test_udp_socks[i] = create_socket(UDP_PORTS[i], IPPROTO_UDP);
+        if (client_test_udp_socks[i] < 0) {
             return -1;
         }
     }
@@ -311,12 +326,18 @@ int main(int argc, char* argv[]) {
 
         int nfds = 0;
         for (i = 0; i < TCP_PORT_COUNT; i++) {
-            FD_SET(listeners[i], &fds);
-            nfds = MAX(nfds, listeners[i] + 1);
+            FD_SET(server_test_listeners[i], &fds);
+            nfds = MAX(nfds, server_test_listeners[i] + 1);
+
+            FD_SET(client_test_listeners[i], &fds);
+            nfds = MAX(nfds, client_test_listeners[i] + 1);
         }
         for (i = 0; i < UDP_PORT_COUNT; i++) {
-            FD_SET(udp_socks[i], &fds);
-            nfds = MAX(nfds, udp_socks[i] + 1);
+            FD_SET(server_test_udp_socks[i], &fds);
+            nfds = MAX(nfds, server_test_udp_socks[i] + 1);
+
+            FD_SET(client_test_udp_socks[i], &fds);
+            nfds = MAX(nfds, client_test_udp_socks[i] + 1);
         }
 
         err = select(nfds, &fds, NULL, NULL, NULL);
@@ -326,11 +347,12 @@ int main(int argc, char* argv[]) {
         }
 
         for (i = 0; i < TCP_PORT_COUNT; i++) {
-            if (FD_ISSET(listeners[i], &fds)) {
+            // For the server test socket, we'll spin off another thread to proxy some traffic
+            if (FD_ISSET(server_test_listeners[i], &fds)) {
                 int sock;
                 pthread_t thread;
 
-                sock = accept(listeners[i], NULL, NULL);
+                sock = accept(server_test_listeners[i], NULL, NULL);
                 if (sock < 0) {
                     perror("accept");
                     break;
@@ -340,17 +362,32 @@ int main(int argc, char* argv[]) {
                     close(sock);
                 }
             }
+
+            // For the client test socket, we'll just accept and gracefully close the socket
+            if (FD_ISSET(client_test_listeners[i], &fds)) {
+                int sock;
+
+                sock = accept(client_test_listeners[i], NULL, NULL);
+                if (sock < 0) {
+                    perror("accept");
+                    break;
+                }
+
+                shutdown(sock, SHUT_WR);
+                close(sock);
+            }
         }
 
         for (i = 0; i < UDP_PORT_COUNT; i++) {
-            if (FD_ISSET(udp_socks[i], &fds)) {
+            // For incoming packets on the server test socket, resend them to the standard port
+            if (FD_ISSET(server_test_udp_socks[i], &fds)) {
                 char buf[32];
                 struct sockaddr_in6 remote_addr;
                 socklen_t remote_addr_len;
                 char remote_addr_str[INET6_ADDRSTRLEN];
 
                 remote_addr_len = sizeof(remote_addr);
-                err = recvfrom(udp_socks[i], buf, sizeof(buf), 0, (struct sockaddr*)&remote_addr, &remote_addr_len);
+                err = recvfrom(server_test_udp_socks[i], buf, sizeof(buf), 0, (struct sockaddr*)&remote_addr, &remote_addr_len);
                 if (err < 0) {
                     perror("recvfrom");
                     break;
@@ -362,7 +399,36 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "Sending %d bytes to [%s]:%d\n", err, remote_addr_str, UDP_PORTS[i]);
 
                 remote_addr.sin6_port = htons(UDP_PORTS[i]);
-                err = sendto(udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
+                err = sendto(server_test_udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
+                if (err < 0) {
+                    perror("sendto");
+                    break;
+                }
+
+                // Throttle send rate by sleeping 10 ms between packets
+                usleep(1000 * 10);
+            }
+
+            // For incoming packets on the client test socket, resend them on the port we received them
+            if (FD_ISSET(client_test_udp_socks[i], &fds)) {
+                char buf[32];
+                struct sockaddr_in6 remote_addr;
+                socklen_t remote_addr_len;
+                char remote_addr_str[INET6_ADDRSTRLEN];
+
+                remote_addr_len = sizeof(remote_addr);
+                err = recvfrom(client_test_udp_socks[i], buf, sizeof(buf), 0, (struct sockaddr*)&remote_addr, &remote_addr_len);
+                if (err < 0) {
+                    perror("recvfrom");
+                    break;
+                }
+
+                inet_ntop(remote_addr.sin6_family, &remote_addr.sin6_addr,
+                          remote_addr_str, sizeof(remote_addr_str));
+
+                fprintf(stderr, "Sending %d bytes to [%s]:%d\n", err, remote_addr_str, ntohs(remote_addr.sin6_port));
+
+                err = sendto(client_test_udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
                 if (err < 0) {
                     perror("sendto");
                     break;
