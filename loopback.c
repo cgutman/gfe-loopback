@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
@@ -287,21 +288,44 @@ int create_socket(unsigned short port, int proto) {
     return sock;
 }
 
+void usage() {
+    printf("gfe-loopback [--reference-port <port number>]\n");
+}
+
 int main(int argc, char* argv[]) {
     fd_set fds;
     int server_test_listeners[TCP_PORT_COUNT];
     int server_test_udp_socks[UDP_PORT_COUNT];
     int client_test_listeners[TCP_PORT_COUNT];
     int client_test_udp_socks[UDP_PORT_COUNT];
+    int reference_port_listener;
     int i;
     int err;
     pthread_attr_t attr;
+    unsigned short reference_port = 0;
+
+    for (i = 1; i < argc; i++) {
+        if (strcasecmp(argv[i], "--reference-port") == 0 && i + 1 < argc) {
+            reference_port = atoi(argv[++i]);
+        }
+        else {
+            usage();
+            return -1;
+        }
+    }
 
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
     // Prevent SIGPIPEs from killing us
     signal(SIGPIPE, SIG_IGN);
+
+    if (reference_port != 0) {
+        reference_port_listener = create_socket(reference_port, IPPROTO_TCP);
+        if (reference_port_listener < 0) {
+            return -1;
+        }
+    }
 
     for (i = 0; i < TCP_PORT_COUNT; i++) {
         server_test_listeners[i] = create_socket(TCP_PORTS[i] + SERVER_TEST_PORT_OFFSET, IPPROTO_TCP);
@@ -345,11 +369,31 @@ int main(int argc, char* argv[]) {
             FD_SET(client_test_udp_socks[i], &fds);
             nfds = MAX(nfds, client_test_udp_socks[i] + 1);
         }
+        if (reference_port != 0) {
+            FD_SET(reference_port_listener, &fds);
+            nfds = MAX(nfds, reference_port_listener + 1);
+        }
 
         err = select(nfds, &fds, NULL, NULL, NULL);
         if (err < 0) {
             perror("select");
             return -1;
+        }
+
+        if (reference_port != 0) {
+            // For the reference port socket, we'll just accept and gracefully close the socket
+            if (FD_ISSET(reference_port_listener, &fds)) {
+                int sock;
+
+                sock = accept(reference_port_listener, NULL, NULL);
+                if (sock < 0) {
+                    perror("accept");
+                    break;
+                }
+
+                shutdown(sock, SHUT_WR);
+                close(sock);
+            }
         }
 
         for (i = 0; i < TCP_PORT_COUNT; i++) {
