@@ -5,7 +5,9 @@ WORKDIR /opt
 RUN gcc -o gfe-loopback loopback.c -pthread
 
 FROM alpine:latest
+RUN apk add --no-cache libcap
 COPY --from=build-env /opt/gfe-loopback /opt
+RUN setcap 'cap_net_bind_service=+ep' /opt/gfe-loopback
 USER nobody
 
 EXPOSE 47984/tcp \
