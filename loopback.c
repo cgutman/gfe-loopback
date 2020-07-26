@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <poll.h>
 
 // Don't allow more than 16KB of traffic on each socket
 #define MAX_BYTES_XFER (1024 * 1024 * 16)
@@ -70,8 +71,7 @@ int connect_back(int sock) {
     char remote_addr_str[INET6_ADDRSTRLEN];
     int err;
     int opt;
-    fd_set fds;
-    struct timeval tv;
+    struct pollfd pfd;
 
     remote_addr_len = sizeof(remote_addr);
     err = getpeername(sock, (struct sockaddr*)&remote_addr, &remote_addr_len);
@@ -112,13 +112,12 @@ int connect_back(int sock) {
     connect(new_sock, (struct sockaddr*)&remote_addr, remote_addr_len);
 
     // Wait 10 seconds for a successful connection or timeout
-    tv.tv_sec = 10;
-    tv.tv_usec = 0;
-    FD_ZERO(&fds);
-    FD_SET(new_sock, &fds);
-    err = select(new_sock + 1, NULL, &fds, NULL, &tv);
+    pfd.fd = new_sock;
+    pfd.events = POLLOUT;
+    pfd.revents = 0;
+    err = poll(&pfd, 1, 10000);
     if (err < 0) {
-        perror("select");
+        perror("poll");
         close(new_sock);
         return -1;
     }
@@ -173,21 +172,27 @@ void* socket_thread(void* context) {
         return NULL;
     }
 
-    for (;;) {
-        fd_set fds;
-        struct timeval tv;
+    do {
+        struct pollfd pfds[2];
+        int nfds = 0;
 
         if (bytes_left <= 0) {
             fprintf(stderr, "Connection data limit exceeded\n");
             break;
         }
 
-        FD_ZERO(&fds);
-
-        if (!s1_read_shutdown)
-            FD_SET(s1, &fds);
-        if (!s2_read_shutdown)
-            FD_SET(s2, &fds);
+        if (!s1_read_shutdown) {
+            pfds[nfds].fd = s1;
+            pfds[nfds].events = POLLIN;
+            pfds[nfds].revents = 0;
+            nfds++;
+        }
+        if (!s2_read_shutdown) {
+            pfds[nfds].fd = s2;
+            pfds[nfds].events = POLLIN;
+            pfds[nfds].revents = 0;
+            nfds++;
+        }
 
         if (s1_read_shutdown && s2_read_shutdown) {
             // If both sides closed, tear it down
@@ -195,44 +200,45 @@ void* socket_thread(void* context) {
         }
 
         // Wait 10 seconds for data
-        tv.tv_sec = 10;
-        tv.tv_usec = 0;
-        err = select(MAX(s1, s2) + 1, &fds, NULL, NULL, &tv);
+        err = poll(pfds, nfds, 10000);
         if (err < 0) {
-            perror("select");
+            perror("poll");
             break;
         }
         else if (err == 0) {
             fprintf(stderr, "Connection idle timeout expired\n");
             break;
         }
-        else if (FD_ISSET(s1, &fds)) {
-            err = splice_data(s1, s2, bytes_left);
-            if (err == 0) {
-                s1_read_shutdown = true;
-                shutdown(s2, SHUT_WR);
-            }
-            else if (err < 0) {
-                break;
-            }
-            else {
-                bytes_left -= err;
+        else {
+            for (int i = 0; i < nfds; i++) {
+                if (pfds[i].revents != 0) {
+                    if (pfds[i].fd == s1) {
+                        // Traffic: S1 -> S2
+                        err = splice_data(s1, s2, bytes_left);
+                        if (err == 0) {
+                            s1_read_shutdown = true;
+                            shutdown(s2, SHUT_WR);
+                        }
+                    }
+                    else {
+                        // Traffic: S2 -> S1
+                        err = splice_data(s2, s1, bytes_left);
+                        if (err == 0) {
+                            s2_read_shutdown = true;
+                            shutdown(s1, SHUT_WR);
+                        }
+                    }
+
+                    if (err < 0) {
+                        break;
+                    }
+                    else {
+                        bytes_left -= err;
+                    }
+                }
             }
         }
-        else if (FD_ISSET(s2, &fds)) {
-            err = splice_data(s2, s1, bytes_left);
-            if (err == 0) {
-                s2_read_shutdown = true;
-                shutdown(s1, SHUT_WR);
-            }
-            else if (err < 0) {
-                break;
-            }
-            else {
-                bytes_left -= err;
-            }
-        }
-    }
+    } while (err >= 0);
 
     fprintf(stderr, "Disconnecting after %d bytes transferred\n", (MAX_BYTES_XFER - bytes_left));
 
