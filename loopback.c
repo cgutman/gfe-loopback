@@ -384,12 +384,21 @@ int main(int argc, char* argv[]) {
             // For the reference port socket, we'll just accept and gracefully close the socket
             if (FD_ISSET(reference_port_listener, &fds)) {
                 int sock;
+                struct sockaddr_in6 remote_addr;
+                socklen_t remote_addr_len;
+                char remote_addr_str[INET6_ADDRSTRLEN];
 
-                sock = accept(reference_port_listener, NULL, NULL);
+                remote_addr_len = sizeof(remote_addr);
+                sock = accept(reference_port_listener, (struct sockaddr*)&remote_addr, &remote_addr_len);
                 if (sock < 0) {
                     perror("accept");
-                    break;
+                    continue;
                 }
+
+                inet_ntop(remote_addr.sin6_family, &remote_addr.sin6_addr,
+                          remote_addr_str, sizeof(remote_addr_str));
+
+                fprintf(stderr, "Accepted connection from [%s]:%d on TCP %d\n", remote_addr_str, ntohs(remote_addr.sin6_port), reference_port);
 
                 shutdown(sock, SHUT_WR);
                 close(sock);
@@ -405,7 +414,7 @@ int main(int argc, char* argv[]) {
                 sock = accept(server_test_listeners[i], NULL, NULL);
                 if (sock < 0) {
                     perror("accept");
-                    break;
+                    continue;
                 }
 
                 if (pthread_create(&thread, &attr, socket_thread, (void*)(intptr_t)sock)) {
@@ -416,12 +425,21 @@ int main(int argc, char* argv[]) {
             // For the client test socket, we'll just accept and gracefully close the socket
             if (FD_ISSET(client_test_listeners[i], &fds)) {
                 int sock;
+                struct sockaddr_in6 remote_addr;
+                socklen_t remote_addr_len;
+                char remote_addr_str[INET6_ADDRSTRLEN];
 
-                sock = accept(client_test_listeners[i], NULL, NULL);
+                remote_addr_len = sizeof(remote_addr);
+                sock = accept(client_test_listeners[i], (struct sockaddr*)&remote_addr, &remote_addr_len);
                 if (sock < 0) {
                     perror("accept");
-                    break;
+                    continue;
                 }
+
+                inet_ntop(remote_addr.sin6_family, &remote_addr.sin6_addr,
+                          remote_addr_str, sizeof(remote_addr_str));
+
+                fprintf(stderr, "Accepted connection from [%s]:%d on TCP %d\n", remote_addr_str, ntohs(remote_addr.sin6_port), TCP_PORTS[i]);
 
                 shutdown(sock, SHUT_WR);
                 close(sock);
@@ -440,7 +458,7 @@ int main(int argc, char* argv[]) {
                 err = recvfrom(server_test_udp_socks[i], buf, sizeof(buf), 0, (struct sockaddr*)&remote_addr, &remote_addr_len);
                 if (err < 0) {
                     perror("recvfrom");
-                    break;
+                    continue;
                 }
 
                 inet_ntop(remote_addr.sin6_family, &remote_addr.sin6_addr,
@@ -452,7 +470,6 @@ int main(int argc, char* argv[]) {
                 err = sendto(server_test_udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
                 if (err < 0) {
                     perror("sendto");
-                    break;
                 }
 
                 // Throttle send rate by sleeping 10 ms between packets
@@ -470,18 +487,17 @@ int main(int argc, char* argv[]) {
                 err = recvfrom(client_test_udp_socks[i], buf, sizeof(buf), 0, (struct sockaddr*)&remote_addr, &remote_addr_len);
                 if (err < 0) {
                     perror("recvfrom");
-                    break;
+                    continue;
                 }
 
                 inet_ntop(remote_addr.sin6_family, &remote_addr.sin6_addr,
                           remote_addr_str, sizeof(remote_addr_str));
 
-                fprintf(stderr, "Sending %d bytes to [%s]:%d\n", err, remote_addr_str, ntohs(remote_addr.sin6_port));
+                fprintf(stderr, "Sending %d bytes from UDP %d to [%s]:%d\n", err, UDP_PORTS[i], remote_addr_str, ntohs(remote_addr.sin6_port));
 
                 err = sendto(client_test_udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
                 if (err < 0) {
                     perror("sendto");
-                    break;
                 }
 
                 // Throttle send rate by sleeping 10 ms between packets
