@@ -40,6 +40,19 @@ unsigned short UDP_PORTS[UDP_PORT_COUNT] = {
     48010
 };
 
+typedef struct {
+    struct in6_addr addr;
+    unsigned char count;
+} history_t;
+
+history_t* traffic_history = NULL;
+unsigned int traffic_history_entries = 0;
+unsigned int traffic_history_limit = 0;
+struct timespec traffic_history_epoch;
+
+#define TRAFFIC_HISTORY_RESET_TIME_SEC 60
+#define TRAFFIC_HISTORY_THROTTLE_COUNT 255
+
 int splice_data(int from, int to, int len) {
     int err;
     char buf[1024];
@@ -288,6 +301,72 @@ int create_socket(unsigned short port, int proto) {
     return sock;
 }
 
+int is_traffic_allowed(struct in6_addr* address) {
+    struct timespec now;
+    unsigned int i;
+
+    // Reset the traffic history if needed
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (now.tv_sec > traffic_history_epoch.tv_sec + TRAFFIC_HISTORY_RESET_TIME_SEC) {
+        free(traffic_history);
+
+        traffic_history = NULL;
+        traffic_history_entries = 0;
+        traffic_history_limit = 0;
+
+        // The current history epoch starts now
+        traffic_history_epoch = now;
+    }
+
+    // Search for an existing entry for this address
+    for (i = 0; i < traffic_history_entries; i++) {
+        int cmp_res = memcmp(address, &traffic_history[i].addr, sizeof(*address));
+        if (cmp_res == 0) {
+            // This entry matches the given address
+            if (traffic_history[i].count == TRAFFIC_HISTORY_THROTTLE_COUNT) {
+                // This traffic is blocked due to DDoS throttling
+                return 0;
+            }
+            else {
+                // This traffic is allowed
+                traffic_history[i].count++;
+                return 1;
+            }
+        }
+        else if (cmp_res > 0) {
+            // We have already passed the location where this address would be.
+            // Break out of the loop so we can add it.
+            break;
+        }
+    }
+
+    // If we made it to this point, we need to add an entry to the history array.
+
+    // Resize the history array if required
+    if (traffic_history_entries == traffic_history_limit) {
+        unsigned int new_buffer_limit = traffic_history_limit == 0 ? 1 : traffic_history_limit * 2;
+        history_t* new_buffer = realloc(traffic_history, new_buffer_limit * sizeof(history_t));
+        if (new_buffer == NULL) {
+            fprintf(stderr, "Unable to allocate traffic history: %d\n", new_buffer_limit);
+
+            // Deny traffic if we can't allocate memory. Something is fishy...
+            return 0;
+        }
+
+        traffic_history = new_buffer;
+        traffic_history_limit = new_buffer_limit;
+    }
+
+    // Slide existing entries over to make room for this one
+    memmove(&traffic_history[i+1], &traffic_history[i], (traffic_history_entries - i) * sizeof(history_t));
+
+    traffic_history[i].addr = *address;
+    traffic_history[i].count = 1;
+    traffic_history_entries++;
+
+    return 1;
+}
+
 void usage() {
     printf("gfe-loopback [--reference-port <port number>]\n");
 }
@@ -464,16 +543,18 @@ int main(int argc, char* argv[]) {
                 inet_ntop(remote_addr.sin6_family, &remote_addr.sin6_addr,
                           remote_addr_str, sizeof(remote_addr_str));
 
-                fprintf(stderr, "Sending %d bytes to [%s]:%d\n", err, remote_addr_str, UDP_PORTS[i]);
+                if (is_traffic_allowed(&remote_addr.sin6_addr)) {
+                    fprintf(stderr, "Echoing %d bytes to [%s]:%d\n", err, remote_addr_str, UDP_PORTS[i]);
 
-                remote_addr.sin6_port = htons(UDP_PORTS[i]);
-                err = sendto(server_test_udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
-                if (err < 0) {
-                    perror("sendto");
+                    remote_addr.sin6_port = htons(UDP_PORTS[i]);
+                    err = sendto(server_test_udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
+                    if (err < 0) {
+                        perror("sendto");
+                    }
                 }
-
-                // Throttle send rate by sleeping 10 ms between packets
-                usleep(1000 * 10);
+                else {
+                    fprintf(stderr, "[%s] is throttled by DDoS mitigation (incoming len = %d)\n", remote_addr_str, err);
+                }
             }
 
             // For incoming packets on the client test socket, resend them on the port we received them
@@ -493,15 +574,17 @@ int main(int argc, char* argv[]) {
                 inet_ntop(remote_addr.sin6_family, &remote_addr.sin6_addr,
                           remote_addr_str, sizeof(remote_addr_str));
 
-                fprintf(stderr, "Sending %d bytes from UDP %d to [%s]:%d\n", err, UDP_PORTS[i], remote_addr_str, ntohs(remote_addr.sin6_port));
+                if (is_traffic_allowed(&remote_addr.sin6_addr)) {
+                    fprintf(stderr, "Echoing %d bytes from UDP %d to [%s]:%d\n", err, UDP_PORTS[i], remote_addr_str, ntohs(remote_addr.sin6_port));
 
-                err = sendto(client_test_udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
-                if (err < 0) {
-                    perror("sendto");
+                    err = sendto(client_test_udp_socks[i], buf, err, 0, (struct sockaddr*)&remote_addr, remote_addr_len);
+                    if (err < 0) {
+                        perror("sendto");
+                    }
                 }
-
-                // Throttle send rate by sleeping 10 ms between packets
-                usleep(1000 * 10);
+                else {
+                    fprintf(stderr, "[%s] is throttled by DDoS mitigation (incoming len = %d)\n", remote_addr_str, err);
+                }
             }
         }
     }
