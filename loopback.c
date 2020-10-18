@@ -528,7 +528,7 @@ int main(int argc, char* argv[]) {
         for (i = 0; i < UDP_PORT_COUNT; i++) {
             // For incoming packets on the server test socket, resend them to the standard port
             if (FD_ISSET(server_test_udp_socks[i], &fds)) {
-                char buf[32];
+                char buf[1500];
                 struct sockaddr_in6 remote_addr;
                 socklen_t remote_addr_len;
                 char remote_addr_str[INET6_ADDRSTRLEN];
@@ -559,7 +559,7 @@ int main(int argc, char* argv[]) {
 
             // For incoming packets on the client test socket, resend them on the port we received them
             if (FD_ISSET(client_test_udp_socks[i], &fds)) {
-                char buf[32];
+                char buf[1500];
                 struct sockaddr_in6 remote_addr;
                 socklen_t remote_addr_len;
                 char remote_addr_str[INET6_ADDRSTRLEN];
