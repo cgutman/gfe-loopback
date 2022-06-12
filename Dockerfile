@@ -1,10 +1,12 @@
-FROM alpine:latest AS build-env
+ARG ARCH=
+
+FROM ${ARCH}alpine:latest AS build-env
 RUN apk add --no-cache gcc musl-dev
 COPY loopback.c /opt
 WORKDIR /opt
 RUN gcc -o gfe-loopback loopback.c -pthread
 
-FROM alpine:latest
+FROM ${ARCH}alpine:latest
 RUN apk add --no-cache libcap
 COPY --from=build-env /opt/gfe-loopback /opt
 RUN setcap 'cap_net_bind_service=+ep' /opt/gfe-loopback
